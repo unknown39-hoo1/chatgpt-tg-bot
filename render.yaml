@@ -1,0 +1,21 @@
+# Render blueprint for the ChatGPT bridge bot (free tier, no card).
+# Deploy: push this repo to GitHub, then "New -> Blueprint" on render.com
+# and point it at the repo. Set the env vars below in the dashboard.
+services:
+  - type: web
+    name: chatgpt-tg-bot
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    autoDeploy: true
+    envVars:
+      - key: BOT_TOKEN
+        sync: false            # set in dashboard (from @BotFather)
+      - key: OWNER_ID
+        value: "5398742663"
+      - key: WEBHOOK_URL
+        sync: false            # set in dashboard: https://<service>.onrender.com
+      - key: D1_DATABASE_ID
+        value: 29ff8a07-4a06-4724-bed0-fb76fd6c31ea
+      - key: D1_API_TOKEN
+        sync: false            # set in dashboard (Cloudflare API token with D1 edit)
