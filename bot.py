@@ -51,10 +51,15 @@ def engine_on() -> bool:
 
 # ---------------- styled buttons (native Bot API >= 9.4 `style`) --------
 def btn(text: str, data: str, style: str | None = None) -> InlineKeyboardButton:
-    kw: dict = {}
-    if style:
-        kw["style"] = style  # primary | success | danger
-    return InlineKeyboardButton(text, callback_data=data, **kw)
+    # Note: `style` requires python-telegram-bot with Bot API 9.4+ support.
+    # If not supported, fall back to plain button.
+    try:
+        kw: dict = {}
+        if style:
+            kw["style"] = style  # primary | success | danger
+        return InlineKeyboardButton(text, callback_data=data, **kw)
+    except TypeError:
+        return InlineKeyboardButton(text, callback_data=data)
 
 
 def stop_kb(nonce: str) -> InlineKeyboardMarkup:
