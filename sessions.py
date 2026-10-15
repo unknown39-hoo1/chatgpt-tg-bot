@@ -118,15 +118,11 @@ def make_gpt(email: str) -> Optional[GPTSession]:
 
 
 async def health_check(email: str) -> str:
-    """Refresh + models through the session proxy. Returns new health."""
+    """Refresh + models through the session proxy (or direct if no proxy). Returns new health."""
     gpt = make_gpt(email)
     if not gpt:
         return "dead"
-    if not gpt.proxy_url:
-        db.update_session(email, health="blocked",
-                          last_check=int(time.time()))
-        await gpt.close()
-        return "blocked"  # no proxy -> server IP is 401-blocked
+    # Try direct connection even without proxy (user order 2026-10-15)
     try:
         await gpt.refresh()
         models = await gpt.models()
