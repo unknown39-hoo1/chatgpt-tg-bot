@@ -6,9 +6,10 @@ Uses the owner's own exported web sessions (session cookie + tokens):
   - ask_stream(): POST /backend-api/conversation (SSE)
   - upload_file(): POST /backend-api/files
 
-Every request for a session goes through that session's assigned user proxy
-(sticky), so OpenAI always sees one consistent IP per account. TLS is always
-verified, so a proxy can never read the tokens.
+Uses curl_cffi with Chrome TLS impersonation to bypass Cloudflare's
+TLS fingerprinting detection. Every request for a session goes through
+that session's assigned user proxy (sticky), so OpenAI always sees one
+consistent IP per account. TLS is always verified.
 
 Memory: every conversation request sets history_and_training_disabled=true
 (temp-chat semantics) -> ChatGPT memory is never read nor written, so nothing
@@ -23,7 +24,7 @@ import time
 import uuid
 from typing import AsyncIterator, Optional
 
-import httpx
+from curl_cffi.requests import AsyncSession
 
 from config import (GPT_AUTH_SESSION, GPT_CONVERSATION, GPT_FILES, GPT_MODELS, UA)
 
@@ -58,23 +59,23 @@ class GPTSession:
         self.access_token = access_token
         self.cookies = cookies or []
         self.proxy_url = proxy_url
-        self._client: Optional[httpx.AsyncClient] = None
+        self._client: Optional[AsyncSession] = None
 
-    def _client_for(self) -> httpx.AsyncClient:
+    def _client_for(self) -> AsyncSession:
         if self._client is None:
-            kw: dict = {"timeout": httpx.Timeout(30.0, read=120.0),
-                        "verify": True, "follow_redirects": True}
+            kw: dict = {
+                "impersonate": "chrome120",
+                "timeout": 30,
+                "verify": True,
+            }
             if self.proxy_url:
-                # direct proxy use: each new proxy IP triggers one platform
-                # approval card (one-time "Always allow"). No way around it.
-                kw["proxy"] = self.proxy_url
-                kw["trust_env"] = False
-            self._client = httpx.AsyncClient(**kw)
+                kw["proxies"] = {"http": self.proxy_url, "https": self.proxy_url}
+            self._client = AsyncSession(**kw)
         return self._client
 
     async def close(self) -> None:
         if self._client:
-            await self._client.aclose()
+            await self._client.close()
             self._client = None
 
     def _cookie_header(self) -> str:
@@ -88,7 +89,7 @@ class GPTSession:
         try:
             r = await c.get(GPT_AUTH_SESSION,
                             headers={**_headers(), "Cookie": self._cookie_header()})
-        except httpx.HTTPError as e:
+        except Exception as e:
             raise GPTError("network", type(e).__name__)
         if r.status_code in (401, 403):
             # IP-flagged exits here even with a valid cookie
@@ -109,7 +110,7 @@ class GPTSession:
         c = self._client_for()
         try:
             r = await c.get(GPT_MODELS, headers=_headers(self.access_token))
-        except httpx.HTTPError as e:
+        except Exception as e:
             raise GPTError("network", type(e).__name__)
         if r.status_code in (401, 403):
             raise GPTError("blocked", f"models -> {r.status_code}")
@@ -133,7 +134,7 @@ class GPTSession:
         files = {"file": (filename, content, mime)}
         try:
             r = await c.post(GPT_FILES, headers=_headers(self.access_token), files=files)
-        except httpx.HTTPError as e:
+        except Exception as e:
             raise GPTError("network", type(e).__name__)
         if r.status_code in (401, 403):
             raise GPTError("blocked", f"files -> {r.status_code}")
@@ -152,7 +153,7 @@ class GPTSession:
         url = f"https://chatgpt.com/backend-api/files/{file_id}/content"
         try:
             r = await c.get(url, headers=_headers(self.access_token))
-        except httpx.HTTPError as e:
+        except Exception as e:
             raise GPTError("network", type(e).__name__)
         if r.status_code != 200:
             raise GPTError("bad", f"asset -> {r.status_code}")
@@ -205,24 +206,20 @@ class GPTSession:
         {'type':'done','conversation_id':...,'message_id':...,'assets':[...]}."""
         c = self._client_for()
         body = self._body(prompt, model, conversation_id, parent_id, attachments or [])
-        req = c.build_request("POST", GPT_CONVERSATION,
-                              headers={**_headers(self.access_token),
-                                       "Content-Type": "application/json",
-                                       "Accept": "text/event-stream"},
-                              json=body)
         try:
-            r = await c.send(req, stream=True)
-        except httpx.HTTPError as e:
+            r = await c.post(GPT_CONVERSATION,
+                             headers={**_headers(self.access_token),
+                                      "Content-Type": "application/json",
+                                      "Accept": "text/event-stream"},
+                             json=body, stream=True)
+        except Exception as e:
             raise GPTError("network", type(e).__name__)
         if r.status_code in (401, 403):
-            await r.aclose()
             raise GPTError("blocked", f"conversation -> {r.status_code}")
         if r.status_code == 429:
-            await r.aclose()
             raise GPTError("rate", "conversation -> 429")
         if r.status_code != 200:
-            txt = (await r.aread())[:200].decode("utf-8", "ignore")
-            await r.aclose()
+            txt = r.text[:200]
             raise GPTError("bad", f"conversation -> {r.status_code}: {txt}")
 
         text = ""
@@ -265,6 +262,6 @@ class GPTSession:
                     text = new_text
                     yield {"type": "delta", "text": text}
         finally:
-            await r.aclose()
+            pass
         yield {"type": "done", "conversation_id": conv_id,
                "message_id": msg_id, "assets": assets, "text": text}
