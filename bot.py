@@ -86,7 +86,7 @@ def panel_text() -> str:
             f"محادثات: {st['chats']}\n\n"
             f"📦 ابعت ملف <b>zip</b> (مثل المرفق) لإضافة جلسات — عدد مفتوح.\n"
             f"🌐 ابعت <b>/proxy add</b> أو ملف <b>txt</b> (سطر لكل بروكسي) لإضافة بروكسيات.\n"
-            f"🚜 <b>/harvest</b> موقوف (المنصة تطلب بطاقة لكل IP) — أضف بروكسياتك بـ /proxy add.")
+            f"🚜 <b>/harvest</b> لحصاد بروكسيات مجانية وفحصها تلقائياً.")
 
 
 # ---------------- commands ----------------
@@ -166,22 +166,24 @@ async def _recheck_sessions(ctx: ContextTypes.DEFAULT_TYPE):
         pass
 
 
-# ---------------- proxy harvester (DISABLED by platform limit) ----------------
-# Bulk free-proxy harvesting is disabled: the platform requires one approval
-# card per proxy IP, so a bulk harvest floods the owner with hundreds of
-# cards. Proxies are added manually via /proxy add (one card each, one-time).
+# ---------------- proxy harvester (ENABLED on Replit) ----------------
+# On Replit there are no per-IP approval cards, so bulk harvesting works.
 HARVEST_RUNNING = False
 
 
 async def cmd_harvest(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_owner(update.effective_user.id):
         return
-    await update.message.reply_text(
-        "⛔ الحصاد الجماعي موقوف: المنصة بتطلب بطاقة سماح لكل IP بروكسي، "
-        "والحصاد كان يولّد مئات البطاقات.\n\n"
-        "الحل الشغال: ابعت بروكسياتك الخاصة بـ <code>/proxy add</code> "
-        "(كل واحد بيطلب سماح مرة وحدة بس)، والبوت بيوزع الجلسات عليهم تلقائياً.",
-        parse_mode="HTML")
+    global HARVEST_RUNNING
+    if HARVEST_RUNNING:
+        await update.message.reply_text("⏳ الحصاد شغّال already، استنى يخلص.")
+        return
+    HARVEST_RUNNING = True
+    try:
+        msg = await update.message.reply_text("🚜 بدأ حصاد البروكسيات…")
+        await _do_harvest(ctx, msg.message_id, 1000)
+    finally:
+        HARVEST_RUNNING = False
 
 
 async def _do_harvest(ctx: ContextTypes.DEFAULT_TYPE, status_id: int, want: int):
